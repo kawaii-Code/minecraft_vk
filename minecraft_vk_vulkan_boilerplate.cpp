@@ -725,20 +725,6 @@ void vulkan_create_image(Vulkan_Boilerplate_Objects *vulkan, u32 width, u32 heig
 }
 
 
-VkShaderModule vulkan_create_shader_module(VkDevice device, String source_code, VkAllocationCallbacks *allocator) {
-    VkShaderModule result;
-
-    VkShaderModuleCreateInfo create_info = {};
-    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    create_info.codeSize = (size_t)source_code.length;
-    create_info.pCode = (u32 *)source_code.ptr;
-    VkResult vulkan_result = vkCreateShaderModule(device, &create_info, allocator, &result);
-    assert(vulkan_result == VK_SUCCESS);
-
-    return result;
-}
-
-
 u32 vulkan_choose_memory_type(Vulkan_Boilerplate_Objects *vulkan, u32 type, VkMemoryPropertyFlags properties) {
     for (u32 i = 0; i < vulkan->memory_properties.memoryTypeCount; i++) {
         if ((type & (1 << i)) && (vulkan->memory_properties.memoryTypes[i].propertyFlags & properties) == properties) {
@@ -786,56 +772,13 @@ void vulkan_teardown(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer) {
     VkAllocationCallbacks *allocator = vulkan->allocator;
     VkDevice device = vulkan->logical_device;
 
-    vkDestroySampler(device, renderer->block_texture_sampler, allocator);
-    vkDestroySampler(device, renderer->texture_sampler, allocator);
-    vkDestroyImageView(device, renderer->texture_view, allocator);
-    vkDestroyImage(device, renderer->texture, allocator);
-    vkFreeMemory(device, renderer->texture_memory, allocator);
-    vkDestroyBuffer(device, renderer->index_buffer, allocator);
-    vkFreeMemory(device, renderer->index_buffer_memory, allocator);
-    vkDestroyBuffer(device, renderer->vertex_buffer, allocator);
-    vkFreeMemory(device, renderer->vertex_buffer_memory, allocator);
     for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(device, vulkan->image_available_semaphores[i], allocator);
         vkDestroySemaphore(device, vulkan->render_finished_semaphores[i], allocator);
         vkDestroyFence(device, vulkan->in_flight_fences[i], allocator);
     }
-    vkDestroyCommandPool(device, vulkan->command_pool, allocator);
-    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, renderer->uniform_buffers[i], allocator);
-        vkUnmapMemory(vulkan->logical_device, renderer->uniform_buffers_memory[i]);
-        vkFreeMemory(device, renderer->uniform_buffers_memory[i], allocator);
-    }
-    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, renderer->model_buffers[i], allocator);
-        vkUnmapMemory(vulkan->logical_device, renderer->model_buffers_memory[i]);
-        vkFreeMemory(device, renderer->model_buffers_memory[i], allocator);
-    }
-    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, renderer->block_info_buffers[i], allocator);
-        vkUnmapMemory(vulkan->logical_device, renderer->block_info_buffers_memory[i]);
-        vkFreeMemory(device, renderer->block_info_buffers_memory[i], allocator);
-    }
-    vkDestroyDescriptorPool(device, vulkan->descriptor_pool, allocator);
 
-    vkDestroyPipeline(device, renderer->block_pipeline.pipeline, allocator);
-    vkDestroyPipelineLayout(device, renderer->block_pipeline.layout, allocator);
-    vkDestroyDescriptorSetLayout(device, renderer->block_pipeline.descriptor_set_layout, allocator);
-
-    vkDestroyPipeline(device, renderer->block_wireframe_pipeline.pipeline, allocator);
-    vkDestroyPipelineLayout(device, renderer->block_wireframe_pipeline.layout, allocator);
-    vkDestroyDescriptorSetLayout(device, renderer->block_wireframe_pipeline.descriptor_set_layout, allocator);
-
-
-    vkDestroyPipeline(device, renderer->texture_pipeline.pipeline, allocator);
-    vkDestroyPipelineLayout(device, renderer->texture_pipeline.layout, allocator);
-    vkDestroyDescriptorSetLayout(device, renderer->texture_pipeline.descriptor_set_layout, allocator);
-
-    vkDestroyPipeline(device, renderer->flat_color_pipeline.pipeline, allocator);
-    vkDestroyPipelineLayout(device, renderer->flat_color_pipeline.layout, allocator);
-    vkDestroyDescriptorSetLayout(device, renderer->flat_color_pipeline.descriptor_set_layout, allocator);
-
-    vkDestroyRenderPass(device, renderer->render_pass, allocator);
+    vulkan_renderer_teardown(vulkan, renderer);
     vulkan_teardown_swapchain(vulkan, renderer);
     vkDestroySurfaceKHR(vulkan->instance, vulkan->surface, allocator);
     vkDestroyDevice(device, allocator);
@@ -859,36 +802,3 @@ VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     fprintf(stderr, "validation layer: %s\n", callback_data->pMessage);
     return VK_FALSE;
 }
-
-
-// "Custom" allocator
-//
-//static u64 total_memory_allocated = 0;
-//
-//void *vulkan_allocator_alloc(void *user_data, size_t size, size_t alignment, VkSystemAllocationScope allocation_scope) {
-//    total_memory_allocated += size;
-//    fprintf(stderr, "alloc: %lld bytes (%lld)\n", size, total_memory_allocated);
-//    return malloc(size);
-//}
-//
-//void *vulkan_allocator_realloc(void *user_data, void *original, size_t size, size_t alignment, VkSystemAllocationScope allocation_scope) {
-//    fprintf(stderr, "realloc: %lld bytes (%d)\n", size, allocation_scope);
-//    return realloc(original, size);
-//}
-//
-//void vulkan_allocator_free(void *user_data, void *ptr) {
-//    fprintf(stderr, "free: %p\n", ptr);
-//    free(ptr);
-//}
-//
-//void *vulkan_allocator_internal_alloc(void *user_data, size_t size, VkInternalAllocationType allocation_type, VkSystemAllocationScope allocation_scope) {
-//    total_memory_allocated += size;
-//    fprintf(stderr, "internal alloc: %lld bytes (%d) [%d]\n", size, allocation_scope, allocation_type);
-//    return malloc(size);
-//}
-//
-//void vulkan_allocator_internal_free(void *user_data, size_t size, VkInternalAllocationType allocation_type, VkSystemAllocationScope allocation_scope) {
-//    fprintf(stderr, "internal free: ???\n");
-//}
-//
-

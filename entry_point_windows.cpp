@@ -53,6 +53,10 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR comman
             game.input.last_mouse_x = win32_state.window_width / 2;
             game.input.last_mouse_y = win32_state.window_height / 2;
             ShowCursor(FALSE);
+
+            i32 game_memory_size = 64 * 1024 * 1024; // 64 Mib
+            game.allocator.total_size = game_memory_size;
+            game.allocator.memory = VirtualAlloc(0, (SIZE_T)game_memory_size, MEM_COMMIT, PAGE_READWRITE);
         }
 
         {
@@ -69,10 +73,22 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR comman
                 &renderer.texture_view,
                 &renderer.texture_sampler
             );
+            vulkan_load_texture(
+                &vulkan,
+                "crosshair.png",
+                &renderer.crosshair_texture,
+                &renderer.crosshair_texture_memory,
+                &renderer.crosshair_texture_view,
+                &renderer.crosshair_texture_sampler
+            );
+            vulkan_renderer_create_buffers_and_descriptor_sets(&vulkan, &renderer);
         }
 
         {
-            game_init(&game);
+            SYSTEMTIME system_time;
+            GetSystemTime(&system_time);
+            i32 seed = system_time.wDay * 24 * 3600 + system_time.wHour * 3600 + system_time.wMinute * 60 + system_time.wSecond;
+            game_init(&game, seed);
         }
     }
 
@@ -120,6 +136,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous_instance, LPSTR comman
             continue;
         }
         vkResetFences(vulkan.logical_device, 1, &vulkan.in_flight_fences[frame_in_flight_index]);
+        game_post_render_cleanup(&vulkan, &renderer, frame_in_flight_index);
 
         game_update_and_render(&game, frame_in_flight_index, swapchain_image_index);
 

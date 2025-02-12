@@ -51,6 +51,71 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
 
     VkResult vulkan_result;
 
+    // Load all shaders
+    Vulkan_Shader_Info vertex_shaders[VERTEX_SHADER_COUNT];
+    Vulkan_Shader_Info fragment_shaders[VERTEX_SHADER_COUNT];
+    for (i32 i = 0; i < VERTEX_SHADER_COUNT; i++) {
+        String vertex_shader_source = win32_read_entire_file(vertex_shader_filepaths[i]);
+
+        VkShaderModule vertex_shader_module;
+        VkShaderModuleCreateInfo shader_module_create_info = {};
+        shader_module_create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        shader_module_create_info.codeSize = (size_t)vertex_shader_source.length;
+        shader_module_create_info.pCode = (u32 *)vertex_shader_source.ptr;
+        vulkan_result = vkCreateShaderModule(vulkan->logical_device, &shader_module_create_info, vulkan->allocator, &vertex_shader_module);
+        assert(vulkan_result == VK_SUCCESS);
+
+        VkPipelineShaderStageCreateInfo vertex_shader_stage_create_info = {};
+        vertex_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertex_shader_stage_create_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertex_shader_stage_create_info.module = vertex_shader_module;
+        vertex_shader_stage_create_info.pName = "main";
+
+        vertex_shaders[(Vertex_Shader_Kind)i].stage_create_info = vertex_shader_stage_create_info;
+        vertex_shaders[(Vertex_Shader_Kind)i].source = vertex_shader_source;
+        vertex_shaders[(Vertex_Shader_Kind)i].module = vertex_shader_module;
+    }
+    for (i32 i = 0; i < FRAGMENT_SHADER_COUNT; i++) {
+        String fragment_shader_source = win32_read_entire_file(fragment_shader_filepaths[i]);
+
+        VkShaderModule fragment_shader_module;
+        VkShaderModuleCreateInfo shader_module_create_info = {};
+        shader_module_create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        shader_module_create_info.codeSize = (size_t)fragment_shader_source.length;
+        shader_module_create_info.pCode = (u32 *)fragment_shader_source.ptr;
+        vulkan_result = vkCreateShaderModule(vulkan->logical_device, &shader_module_create_info, vulkan->allocator, &fragment_shader_module);
+        assert(vulkan_result == VK_SUCCESS);
+
+        VkPipelineShaderStageCreateInfo fragment_shader_stage_create_info = {};
+        fragment_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragment_shader_stage_create_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragment_shader_stage_create_info.module = fragment_shader_module;
+        fragment_shader_stage_create_info.pName = "main";
+
+        fragment_shaders[i].stage_create_info = fragment_shader_stage_create_info;
+        fragment_shaders[i].source = fragment_shader_source;
+        fragment_shaders[i].module = fragment_shader_module;
+    }
+
+
+    // Create a descriptor pool
+    i32 uniform_buffers_descriptor_count = 4;
+    i32 sampler_descriptor_count = 3;
+
+    VkDescriptorPoolSize pool_sizes[2];
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[0].descriptorCount = uniform_buffers_descriptor_count * (u32)(MAX_FRAMES_IN_FLIGHT);
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[1].descriptorCount = sampler_descriptor_count * (u32)(MAX_FRAMES_IN_FLIGHT);
+
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = ARRAY_LENGTH(pool_sizes);
+    pool_info.pPoolSizes = pool_sizes;
+    pool_info.maxSets = (uniform_buffers_descriptor_count + sampler_descriptor_count) * (u32)(MAX_FRAMES_IN_FLIGHT);
+    vulkan_result = vkCreateDescriptorPool(vulkan->logical_device, &pool_info, vulkan->allocator, &vulkan->descriptor_pool);
+    assert(vulkan_result == VK_SUCCESS);
+
     // Create render pass
     VkRenderPass render_pass;
     {
@@ -222,17 +287,12 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
     {
         Renderer_Pipeline texture_pipeline;
 
-        String vertex_shader_source = win32_read_entire_file("texture_vertex.spv");
-        String fragment_shader_source = win32_read_entire_file("texture_fragment.spv");
-        VkShaderModule vertex_shader_module = vulkan_create_shader_module(vulkan->logical_device, vertex_shader_source, vulkan->allocator);
-        VkShaderModule fragment_shader_module = vulkan_create_shader_module(vulkan->logical_device, fragment_shader_source, vulkan->allocator);
-
         VkVertexInputBindingDescription binding_description = {};
         binding_description.binding = 0;
         binding_description.stride = sizeof(Vertex);
         binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        VkVertexInputAttributeDescription attribute_descriptions[3] = {};
+        VkVertexInputAttributeDescription attribute_descriptions[2] = {};
         index = 0;
         attribute_descriptions[index].binding = 0;
         attribute_descriptions[index].location = 0;
@@ -241,11 +301,6 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         index += 1;
         attribute_descriptions[index].binding = 0;
         attribute_descriptions[index].location = 1;
-        attribute_descriptions[index].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attribute_descriptions[index].offset = offsetof(Vertex, color);
-        index += 1;
-        attribute_descriptions[index].binding = 0;
-        attribute_descriptions[index].location = 2;
         attribute_descriptions[index].format = VK_FORMAT_R32G32_SFLOAT;
         attribute_descriptions[index].offset = offsetof(Vertex, texture_coordinates);
         index += 1;
@@ -258,21 +313,9 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         vertex_input_stage.vertexAttributeDescriptionCount = ARRAY_LENGTH(attribute_descriptions);
         vertex_input_stage.pVertexAttributeDescriptions = attribute_descriptions;
 
-        VkPipelineShaderStageCreateInfo vertex_shader_stage_create_info = {};
-        vertex_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        vertex_shader_stage_create_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        vertex_shader_stage_create_info.module = vertex_shader_module;
-        vertex_shader_stage_create_info.pName = "main";
-
-        VkPipelineShaderStageCreateInfo fragment_shader_stage_create_info = {};
-        fragment_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        fragment_shader_stage_create_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fragment_shader_stage_create_info.module = fragment_shader_module;
-        fragment_shader_stage_create_info.pName = "main";
-
         VkPipelineShaderStageCreateInfo shader_stages[2] = {
-            vertex_shader_stage_create_info,
-            fragment_shader_stage_create_info,
+            vertex_shaders[VERTEX_SHADER_KIND_TEXTURE].stage_create_info,
+            fragment_shaders[FRAGMENT_SHADER_KIND_TEXTURE].stage_create_info,
         };
 
         VkDescriptorSetLayoutBinding layout_bindings[2] = {};
@@ -308,11 +351,6 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         );
 
         renderer->texture_pipeline = texture_pipeline;
-
-        VirtualFree(vertex_shader_source.ptr, 0, MEM_RELEASE);
-        VirtualFree(fragment_shader_source.ptr, 0, MEM_RELEASE);
-        vkDestroyShaderModule(vulkan->logical_device, fragment_shader_module, vulkan->allocator);
-        vkDestroyShaderModule(vulkan->logical_device, vertex_shader_module, vulkan->allocator);
     }
 
     // Configure block pipeline
@@ -339,11 +377,6 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         sampler_create_info.maxLod = 0.0f;
         vulkan_result = vkCreateSampler(vulkan->logical_device, &sampler_create_info, vulkan->allocator, &block_texture_sampler);
         assert(vulkan_result == VK_SUCCESS);
-
-        String vertex_shader_source = win32_read_entire_file("block_vertex.spv");
-        String fragment_shader_source = win32_read_entire_file("block_fragment.spv");
-        VkShaderModule vertex_shader_module = vulkan_create_shader_module(vulkan->logical_device, vertex_shader_source, vulkan->allocator);
-        VkShaderModule fragment_shader_module = vulkan_create_shader_module(vulkan->logical_device, fragment_shader_source, vulkan->allocator);
 
         VkVertexInputBindingDescription binding_descriptions[2] = {};
         index = 0;
@@ -388,21 +421,9 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         vertex_input_stage.vertexAttributeDescriptionCount = ARRAY_LENGTH(attribute_descriptions);
         vertex_input_stage.pVertexAttributeDescriptions = attribute_descriptions;
 
-        VkPipelineShaderStageCreateInfo vertex_shader_stage_create_info = {};
-        vertex_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        vertex_shader_stage_create_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        vertex_shader_stage_create_info.module = vertex_shader_module;
-        vertex_shader_stage_create_info.pName = "main";
-
-        VkPipelineShaderStageCreateInfo fragment_shader_stage_create_info = {};
-        fragment_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        fragment_shader_stage_create_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fragment_shader_stage_create_info.module = fragment_shader_module;
-        fragment_shader_stage_create_info.pName = "main";
-
         VkPipelineShaderStageCreateInfo shader_stages[] = {
-            vertex_shader_stage_create_info,
-            fragment_shader_stage_create_info,
+            vertex_shaders[VERTEX_SHADER_KIND_BLOCK].stage_create_info,
+            fragment_shaders[FRAGMENT_SHADER_KIND_BLOCK].stage_create_info,
         };
 
         VkDescriptorSetLayoutBinding layout_bindings[2] = {};
@@ -436,13 +457,22 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
             &color_blend_stage
         );
 
+        VkPushConstantRange push_constant_range = {};
+        push_constant_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        push_constant_range.offset = 0;
+        push_constant_range.size = sizeof(glm::vec3);
+
         rasterization_stage.polygonMode = VK_POLYGON_MODE_LINE;
+        VkPipelineShaderStageCreateInfo wireframe_pipeline_shader_stages[] = {
+            vertex_shaders[VERTEX_SHADER_KIND_BLOCK].stage_create_info,
+            fragment_shaders[FRAGMENT_SHADER_KIND_BLOCK].stage_create_info,
+        };
         renderer->block_wireframe_pipeline = vulkan_renderer_create_pipeline(
             vulkan,
             renderer->render_pass,
             layout_bindings, ARRAY_LENGTH(layout_bindings),
-            0, 0,
-            shader_stages, ARRAY_LENGTH(shader_stages),
+            &push_constant_range, 1,
+            wireframe_pipeline_shader_stages, ARRAY_LENGTH(wireframe_pipeline_shader_stages),
             &input_assembly_stage,
             &vertex_input_stage,
             &dynamic_states,
@@ -457,22 +487,11 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         renderer->block_pipeline = block_pipeline;
         renderer->block_texture_sampler = block_texture_sampler;
 
-        VirtualFree(vertex_shader_source.ptr, 0, MEM_RELEASE);
-        VirtualFree(fragment_shader_source.ptr, 0, MEM_RELEASE);
-        vkDestroyShaderModule(vulkan->logical_device, fragment_shader_module, vulkan->allocator);
-        vkDestroyShaderModule(vulkan->logical_device, vertex_shader_module, vulkan->allocator);
     }
-
 
     // Configure flat color pipeline
     {
         Renderer_Pipeline flat_color_pipeline;
-
-        String vertex_shader_source = win32_read_entire_file("flat_color_vertex.spv");
-        String fragment_shader_source = win32_read_entire_file("flat_color_fragment.spv");
-
-        VkShaderModule vertex_shader_module = vulkan_create_shader_module(vulkan->logical_device, vertex_shader_source, vulkan->allocator);
-        VkShaderModule fragment_shader_module = vulkan_create_shader_module(vulkan->logical_device, fragment_shader_source, vulkan->allocator);
 
         VkVertexInputBindingDescription binding_descriptions[2] = {};
         index = 0;
@@ -517,21 +536,9 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         vertex_input_stage.vertexAttributeDescriptionCount = ARRAY_LENGTH(attribute_descriptions);
         vertex_input_stage.pVertexAttributeDescriptions = attribute_descriptions;
 
-        VkPipelineShaderStageCreateInfo vertex_shader_stage_create_info = {};
-        vertex_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        vertex_shader_stage_create_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        vertex_shader_stage_create_info.module = vertex_shader_module;
-        vertex_shader_stage_create_info.pName = "main";
-
-        VkPipelineShaderStageCreateInfo fragment_shader_stage_create_info = {};
-        fragment_shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        fragment_shader_stage_create_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fragment_shader_stage_create_info.module = fragment_shader_module;
-        fragment_shader_stage_create_info.pName = "main";
-
         VkPipelineShaderStageCreateInfo shader_stages[] = {
-            vertex_shader_stage_create_info,
-            fragment_shader_stage_create_info,
+            vertex_shaders[VERTEX_SHADER_KIND_FLAT_COLOR].stage_create_info,
+            fragment_shaders[FRAGMENT_SHADER_KIND_FLAT_COLOR].stage_create_info,
         };
 
         VkDescriptorSetLayoutBinding layout_bindings[1] = {};
@@ -566,12 +573,107 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
         );
 
         renderer->flat_color_pipeline = flat_color_pipeline;
-
-        VirtualFree(vertex_shader_source.ptr, 0, MEM_RELEASE);
-        VirtualFree(fragment_shader_source.ptr, 0, MEM_RELEASE);
-        vkDestroyShaderModule(vulkan->logical_device, fragment_shader_module, vulkan->allocator);
-        vkDestroyShaderModule(vulkan->logical_device, vertex_shader_module, vulkan->allocator);
     }
+
+    // Configure quad pipeline
+    {
+        Renderer_Pipeline quad_pipeline;
+
+        VkVertexInputBindingDescription binding_descriptions[1] = {};
+        index = 0;
+        binding_descriptions[index].binding = 0;
+        binding_descriptions[index].stride = sizeof(Quad_Vertex);
+        binding_descriptions[index].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        index += 1;
+        assert(index == ARRAY_LENGTH(binding_descriptions));
+
+        VkVertexInputAttributeDescription attribute_descriptions[2] = {};
+        index = 0;
+        attribute_descriptions[index].binding = 0;
+        attribute_descriptions[index].location = 0;
+        attribute_descriptions[index].format = VK_FORMAT_R32G32_SFLOAT;
+        attribute_descriptions[index].offset = offsetof(Quad_Vertex, position);
+        index += 1;
+        attribute_descriptions[index].binding = 0;
+        attribute_descriptions[index].location = 1;
+        attribute_descriptions[index].format = VK_FORMAT_R32G32_SFLOAT;
+        attribute_descriptions[index].offset = offsetof(Quad_Vertex, texture_coordinates);
+        index += 1;
+        assert(index == ARRAY_LENGTH(attribute_descriptions));
+
+        VkSampler quad_texture_sampler;
+        VkSamplerCreateInfo sampler_create_info = {};
+        sampler_create_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sampler_create_info.magFilter = VK_FILTER_NEAREST;
+        sampler_create_info.minFilter = VK_FILTER_NEAREST;
+        sampler_create_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        sampler_create_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        sampler_create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        sampler_create_info.anisotropyEnable = VK_TRUE;
+        sampler_create_info.maxAnisotropy = 1.0f;
+        sampler_create_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
+        sampler_create_info.unnormalizedCoordinates = VK_FALSE;
+        sampler_create_info.compareEnable = VK_FALSE;
+        sampler_create_info.compareOp = VK_COMPARE_OP_ALWAYS;
+        sampler_create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sampler_create_info.mipLodBias = 0.0f;
+        sampler_create_info.minLod = 0.0f;
+        sampler_create_info.maxLod = 0.0f;
+        vulkan_result = vkCreateSampler(vulkan->logical_device, &sampler_create_info, vulkan->allocator, &quad_texture_sampler);
+        assert(vulkan_result == VK_SUCCESS);
+
+        VkPipelineVertexInputStateCreateInfo vertex_input_stage = {};
+        vertex_input_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertex_input_stage.vertexBindingDescriptionCount = ARRAY_LENGTH(binding_descriptions);
+        vertex_input_stage.pVertexBindingDescriptions = binding_descriptions;
+        vertex_input_stage.vertexAttributeDescriptionCount = ARRAY_LENGTH(attribute_descriptions);
+        vertex_input_stage.pVertexAttributeDescriptions = attribute_descriptions;
+
+        VkPipelineShaderStageCreateInfo shader_stages[] = {
+            vertex_shaders[VERTEX_SHADER_KIND_QUAD].stage_create_info,
+            fragment_shaders[FRAGMENT_SHADER_KIND_TEXTURE].stage_create_info,
+        };
+
+        VkDescriptorSetLayoutBinding layout_bindings[1] = {};
+        index = 0;
+        layout_bindings[index].binding = 1;
+        layout_bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        layout_bindings[index].descriptorCount = 1;
+        layout_bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        layout_bindings[index].pImmutableSamplers = &quad_texture_sampler;
+        index += 1;
+        assert(index == ARRAY_LENGTH(layout_bindings));
+
+        quad_pipeline = vulkan_renderer_create_pipeline(
+            vulkan,
+            renderer->render_pass,
+            layout_bindings, ARRAY_LENGTH(layout_bindings),
+            0, 0,
+            shader_stages, ARRAY_LENGTH(shader_stages),
+            &input_assembly_stage,
+            &vertex_input_stage,
+            &dynamic_states,
+            &viewport_stage,
+            &rasterization_stage,
+            &multisampling_stage,
+            &depth_stencil_stage,
+            &color_blend_stage
+        );
+
+        renderer->quad_pipeline = quad_pipeline;
+    }
+
+
+    // Cleanup shader data, it already got baked into the pipeline
+    for (i32 i = 0; i < VERTEX_SHADER_COUNT; i++) {
+        VirtualFree(vertex_shaders[i].source.ptr, 0, MEM_RELEASE);
+        vkDestroyShaderModule(vulkan->logical_device, vertex_shaders[i].module, vulkan->allocator);
+    }
+    for (i32 i = 0; i < FRAGMENT_SHADER_COUNT; i++) {
+        VirtualFree(fragment_shaders[i].source.ptr, 0, MEM_RELEASE);
+        vkDestroyShaderModule(vulkan->logical_device, fragment_shaders[i].module, vulkan->allocator);
+    }
+
 
     // Send single block vertex data to GPU
     {
@@ -635,6 +737,153 @@ void vulkan_renderer_init(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer
 }
 
 
+void vulkan_renderer_create_buffers_and_descriptor_sets(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer) {
+    VkResult vulkan_result;
+    u32 index;
+
+    VkDeviceSize ubo_buffer_size = sizeof(Uniform_Buffer_Object);
+    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vulkan_create_buffer(vulkan, ubo_buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->uniform_buffers[i], &renderer->uniform_buffers_memory[i]);
+        vkMapMemory(vulkan->logical_device, renderer->uniform_buffers_memory[i], 0, ubo_buffer_size, 0, &renderer->uniform_buffers_mapped_memory[i]);
+    }
+
+    VkDeviceSize block_info_buffer_size = MAX_BLOCK_ON_SCREEN_COUNT * sizeof(Block_Info);
+    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vulkan_create_buffer(vulkan, block_info_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &renderer->block_info_buffers[i], &renderer->block_info_buffers_memory[i]);
+        vkMapMemory(vulkan->logical_device, renderer->block_info_buffers_memory[i], 0, block_info_buffer_size, 0, &renderer->block_info_buffers_mapped_memory[i]);
+    }
+
+    {
+        for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            VkDescriptorBufferInfo buffer_info = {};
+            buffer_info.buffer = renderer->uniform_buffers[i];
+            buffer_info.offset = 0;
+            buffer_info.range = sizeof(Uniform_Buffer_Object);
+
+            VkDescriptorImageInfo image_info = {};
+            image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            image_info.imageView = renderer->texture_view;
+            image_info.sampler = renderer->texture_sampler;
+
+            VkWriteDescriptorSet descriptor_writes[2] = {};
+            descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[0].dstSet = renderer->texture_pipeline.descriptor_sets[i];
+            descriptor_writes[0].dstBinding = 0;
+            descriptor_writes[0].dstArrayElement = 0;
+            descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptor_writes[0].descriptorCount = 1;
+            descriptor_writes[0].pBufferInfo = &buffer_info;
+            descriptor_writes[0].pImageInfo = 0;
+            descriptor_writes[0].pTexelBufferView = 0;
+
+            descriptor_writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[1].dstSet = renderer->texture_pipeline.descriptor_sets[i];
+            descriptor_writes[1].dstBinding = 1;
+            descriptor_writes[1].dstArrayElement = 0;
+            descriptor_writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptor_writes[1].descriptorCount = 1;
+            descriptor_writes[1].pBufferInfo = 0;
+            descriptor_writes[1].pImageInfo = &image_info;
+            descriptor_writes[1].pTexelBufferView = 0;
+
+            vkUpdateDescriptorSets(vulkan->logical_device, ARRAY_LENGTH(descriptor_writes), descriptor_writes, 0, 0);
+        }
+    }
+
+    {
+        for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            VkDescriptorBufferInfo ubo_buffer_info = {};
+            ubo_buffer_info.buffer = renderer->uniform_buffers[i];
+            ubo_buffer_info.offset = 0;
+            ubo_buffer_info.range = sizeof(Uniform_Buffer_Object);
+
+            VkDescriptorImageInfo block_texture_info = {};
+            block_texture_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            block_texture_info.imageView = renderer->texture_view;
+            block_texture_info.sampler = renderer->block_texture_sampler;
+
+            VkWriteDescriptorSet descriptor_writes[2] = {};
+            index = 0;
+            descriptor_writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[index].dstSet = renderer->block_pipeline.descriptor_sets[i];
+            descriptor_writes[index].dstBinding = 0;
+            descriptor_writes[index].dstArrayElement = 0;
+            descriptor_writes[index].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptor_writes[index].descriptorCount = 1;
+            descriptor_writes[index].pBufferInfo = &ubo_buffer_info;
+            index += 1;
+            descriptor_writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[index].dstSet = renderer->block_pipeline.descriptor_sets[i];
+            descriptor_writes[index].dstBinding = 1;
+            descriptor_writes[index].dstArrayElement = 0;
+            descriptor_writes[index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptor_writes[index].descriptorCount = 1;
+            descriptor_writes[index].pImageInfo = &block_texture_info;
+            index += 1;
+            assert(index == ARRAY_LENGTH(descriptor_writes));
+
+            vkUpdateDescriptorSets(vulkan->logical_device, ARRAY_LENGTH(descriptor_writes), descriptor_writes, 0, 0);
+        }
+    }
+    {
+        VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+        for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            layouts[i] = renderer->flat_color_pipeline.descriptor_set_layout;
+        }
+
+        VkDescriptorSetAllocateInfo allocation_info = {};
+        allocation_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocation_info.descriptorPool = vulkan->descriptor_pool;
+        allocation_info.descriptorSetCount = (u32)(MAX_FRAMES_IN_FLIGHT);
+        allocation_info.pSetLayouts = layouts;
+        vulkan_result = vkAllocateDescriptorSets(vulkan->logical_device, &allocation_info, renderer->flat_color_pipeline.descriptor_sets);
+        assert(vulkan_result == VK_SUCCESS);
+
+        for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            VkDescriptorBufferInfo ubo_buffer_info = {};
+            ubo_buffer_info.buffer = renderer->uniform_buffers[i];
+            ubo_buffer_info.offset = 0;
+            ubo_buffer_info.range = sizeof(Uniform_Buffer_Object);
+
+            VkWriteDescriptorSet descriptor_writes[1] = {};
+            descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[0].dstSet = renderer->flat_color_pipeline.descriptor_sets[i];
+            descriptor_writes[0].dstBinding = 0;
+            descriptor_writes[0].dstArrayElement = 0;
+            descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptor_writes[0].descriptorCount = 1;
+            descriptor_writes[0].pBufferInfo = &ubo_buffer_info;
+            descriptor_writes[0].pImageInfo = 0;
+            descriptor_writes[0].pTexelBufferView = 0;
+
+            vkUpdateDescriptorSets(vulkan->logical_device, ARRAY_LENGTH(descriptor_writes), descriptor_writes, 0, 0);
+        }
+    }
+    {
+        for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            VkDescriptorImageInfo image_info = {};
+            image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            image_info.imageView = renderer->crosshair_texture_view;
+            image_info.sampler = renderer->crosshair_texture_sampler;
+
+            VkWriteDescriptorSet descriptor_writes[1] = {};
+            index = 0;
+        descriptor_writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptor_writes[index].dstSet = renderer->quad_pipeline.descriptor_sets[i];
+            descriptor_writes[index].dstBinding = 1;
+            descriptor_writes[index].dstArrayElement = 0;
+            descriptor_writes[index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptor_writes[index].descriptorCount = 1;
+            descriptor_writes[index].pImageInfo = &image_info;
+            index += 1;
+            assert(index == ARRAY_LENGTH(descriptor_writes));
+
+            vkUpdateDescriptorSets(vulkan->logical_device, ARRAY_LENGTH(descriptor_writes), descriptor_writes, 0, 0);
+        }
+    }
+}
+
+
 Renderer_Pipeline vulkan_renderer_create_pipeline(
     Vulkan_Boilerplate_Objects *vulkan,
     VkRenderPass render_pass,
@@ -687,7 +936,66 @@ Renderer_Pipeline vulkan_renderer_create_pipeline(
     pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
     pipeline_create_info.basePipelineIndex = -1;
 
-    vkCreateGraphicsPipelines(vulkan->logical_device, 0, 1, &pipeline_create_info, vulkan->allocator, &result.pipeline);
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        layouts[i] = result.descriptor_set_layout;
+    }
+    VkDescriptorSetAllocateInfo allocation_info = {};
+    allocation_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocation_info.descriptorPool = vulkan->descriptor_pool;
+    allocation_info.descriptorSetCount = (u32)(MAX_FRAMES_IN_FLIGHT);
+    allocation_info.pSetLayouts = layouts;
+    vulkan_result = vkAllocateDescriptorSets(vulkan->logical_device, &allocation_info, result.descriptor_sets);
+    assert(vulkan_result == VK_SUCCESS);
+
+    vulkan_result = vkCreateGraphicsPipelines(vulkan->logical_device, 0, 1, &pipeline_create_info, vulkan->allocator, &result.pipeline);
+    assert(vulkan_result == VK_SUCCESS);
 
     return result;
+}
+
+
+void vulkan_renderer_teardown(Vulkan_Boilerplate_Objects *vulkan, Renderer *renderer) {
+    VkAllocationCallbacks *allocator = vulkan->allocator;
+    VkDevice device = vulkan->logical_device;
+
+    vkDestroySampler(device, renderer->block_texture_sampler, allocator);
+    vkDestroySampler(device, renderer->texture_sampler, allocator);
+    vkDestroyImageView(device, renderer->texture_view, allocator);
+    vkDestroyImage(device, renderer->texture, allocator);
+    vkFreeMemory(device, renderer->texture_memory, allocator);
+    vkDestroyBuffer(device, renderer->index_buffer, allocator);
+    vkFreeMemory(device, renderer->index_buffer_memory, allocator);
+    vkDestroyBuffer(device, renderer->vertex_buffer, allocator);
+    vkFreeMemory(device, renderer->vertex_buffer_memory, allocator);
+    vkDestroyCommandPool(device, vulkan->command_pool, allocator);
+    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(device, renderer->uniform_buffers[i], allocator);
+        vkUnmapMemory(device, renderer->uniform_buffers_memory[i]);
+        vkFreeMemory(device, renderer->uniform_buffers_memory[i], allocator);
+    }
+    for (i32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(device, renderer->block_info_buffers[i], allocator);
+        vkUnmapMemory(device, renderer->block_info_buffers_memory[i]);
+        vkFreeMemory(device, renderer->block_info_buffers_memory[i], allocator);
+    }
+    vkDestroyDescriptorPool(device, vulkan->descriptor_pool, allocator);
+
+    vkDestroyPipeline(device, renderer->block_pipeline.pipeline, allocator);
+    vkDestroyPipelineLayout(device, renderer->block_pipeline.layout, allocator);
+    vkDestroyDescriptorSetLayout(device, renderer->block_pipeline.descriptor_set_layout, allocator);
+
+    vkDestroyPipeline(device, renderer->block_wireframe_pipeline.pipeline, allocator);
+    vkDestroyPipelineLayout(device, renderer->block_wireframe_pipeline.layout, allocator);
+    vkDestroyDescriptorSetLayout(device, renderer->block_wireframe_pipeline.descriptor_set_layout, allocator);
+
+    vkDestroyPipeline(device, renderer->texture_pipeline.pipeline, allocator);
+    vkDestroyPipelineLayout(device, renderer->texture_pipeline.layout, allocator);
+    vkDestroyDescriptorSetLayout(device, renderer->texture_pipeline.descriptor_set_layout, allocator);
+
+    vkDestroyPipeline(device, renderer->flat_color_pipeline.pipeline, allocator);
+    vkDestroyPipelineLayout(device, renderer->flat_color_pipeline.layout, allocator);
+    vkDestroyDescriptorSetLayout(device, renderer->flat_color_pipeline.descriptor_set_layout, allocator);
+
+    vkDestroyRenderPass(device, renderer->render_pass, allocator);
 }

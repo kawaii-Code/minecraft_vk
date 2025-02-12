@@ -128,6 +128,10 @@ int main(int argc, char **argv) {
     if (!ok) {
         return 1;
     }
+    ok = compile_shader("quad");
+    if (!ok) {
+        return 1;
+    }
 
     Nob_File_Paths texture_files = {};
     nob_read_entire_dir("assets/textures", &texture_files);
